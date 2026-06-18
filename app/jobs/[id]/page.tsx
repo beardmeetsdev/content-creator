@@ -93,20 +93,31 @@ function ClipCard({
           {clip.resultUrl && clip.type === 'image' && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={clip.resultUrl}
+              src={`/api/proxy-media?url=${encodeURIComponent(clip.resultUrl)}`}
               alt={clip.label}
               className="w-full rounded-xl border border-neutral-700 max-h-64 object-cover"
             />
           )}
           {clip.resultUrl && clip.type === 'video_clip' && (
-            <video
-              src={clip.resultUrl}
-              controls
-              className="w-full rounded-xl border border-neutral-700 max-h-64"
-            />
+            <div>
+              <video
+                src={`/api/proxy-media?url=${encodeURIComponent(clip.resultUrl)}`}
+                controls
+                playsInline
+                className="w-full rounded-xl border border-neutral-700 max-h-64"
+              />
+              <a
+                href={clip.resultUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-neutral-500 hover:text-neutral-300 mt-1 inline-block"
+              >
+                ↗ Open in new tab
+              </a>
+            </div>
           )}
           {clip.resultUrl && clip.type === 'voiceover' && (
-            <audio src={clip.resultUrl} controls className="w-full mt-1" />
+            <audio src={`/api/proxy-media?url=${encodeURIComponent(clip.resultUrl)}`} controls className="w-full mt-1" />
           )}
           {clip.resultText && (
             <div className="bg-green-950/40 border border-green-800 rounded-xl p-3 text-sm text-green-200 whitespace-pre-wrap">
@@ -242,7 +253,7 @@ export default function JobPage() {
 
       persist({ ...job, blueprint: updatedBlueprint });
     },
-    [job],
+    [job, videoModel, imageModel],
   );
 
   // ── Generate ALL media clips ──────────────────────────────────────────────
