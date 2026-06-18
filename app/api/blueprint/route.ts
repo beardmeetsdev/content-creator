@@ -1,76 +1,145 @@
 import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
-import { BlueprintClip, ContentType, PlatformId } from '@/types';
+import Replicate from 'replicate';
+import { BlueprintClip, ContentType, PlatformId, ContentPurpose } from '@/types';
 
-function getClient() {
-  return new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY ?? 'missing',
-    ...(process.env.OPENAI_BASE_URL ? { baseURL: process.env.OPENAI_BASE_URL } : {}),
-  });
+const LLM_MODEL = 'meta/meta-llama-3-70b-instruct';
+
+function getReplicate() {
+  return new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
 }
 
-const MODEL = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
+// Platform-specific timing and best practices
+const PLATFORM_SPECS: Record<PlatformId, { optimalSeconds: number; maxSeconds: number; notes: string }> = {
+  tiktok:    { optimalSeconds: 9,  maxSeconds: 15,  notes: 'TikTok ads that convert best run 9–15 seconds. First 3 seconds must hook instantly or viewers scroll. Vertical 9:16. Captions essential as many watch silently.' },
+  instagram: { optimalSeconds: 15, maxSeconds: 30,  notes: 'Instagram Reel ads: 7–15 seconds optimal. Stories: 6–15 seconds. High energy, fast cuts, music-driven. First frame must be visually striking.' },
+  youtube:   { optimalSeconds: 30, maxSeconds: 60,  notes: 'YouTube Shorts ads: 15–60 seconds. First 5 seconds are unskippable — use them to hook. Can tell a fuller story than other platforms.' },
+  facebook:  { optimalSeconds: 15, maxSeconds: 30,  notes: 'Facebook video ads: 15 seconds optimal. 85% watched with sound off — text overlays are critical. Square or vertical. Show value in first 3 seconds.' },
+  linkedin:  { optimalSeconds: 20, maxSeconds: 30,  notes: 'LinkedIn video ads: 15–30 seconds. Professional tone. Lead with the business problem, then the solution. ROI-focused messaging.' },
+  twitter:   { optimalSeconds: 15, maxSeconds: 30,  notes: 'X/Twitter video ads: 15–30 seconds. Captions essential. Fast paced. Lead with the insight or surprise.' },
+};
+
+// Narrative structures per purpose
+const NARRATIVE_STRUCTURES: Record<ContentPurpose, string> = {
+  ad: `PROVEN AD NARRATIVE — follow this exact structure (this is how successful mobile app ads are structured):
+1. HOOK (first 20% of total time): A relatable question, surprising scenario, or strong emotion. Do NOT show the product yet. Show a PERSON in a situation your audience recognises. Example: someone frustrated scrolling through TikTok looking for a recipe they saw earlier.
+2. DESIRE/PROBLEM SHOTS (middle 40%): 2–3 rapid-fire cuts showing the specific things the viewer wishes they could save/have/do. Each cut is 1–2 seconds. Diverse and visually interesting. Still no product.
+3. SOLUTION REVEAL (10–15%): The product appears for the first time as the answer. If app screenshots are uploaded, use them here — show the app on an iPhone screen. A person's hand holding the phone works well.
+4. QUICK DEMO (10–15%): One clear shot of the key feature in action. App on phone. Reference uploaded images.
+5. CTA (final 10–15%): Clean text overlay with the call to action. Caption with download link message.`,
+
+  showcase: `PRODUCT SHOWCASE NARRATIVE — structured demo of the product:
+1. INTRO SHOT (10%): Visually interesting establishing shot that sets the mood. Can show the product.
+2. FEATURE SHOTS (60%): Each key feature gets its own 2–3 second shot. App on iPhone, clear UI. Reference uploaded images for all app screens.
+3. BENEFIT SUMMARY (15%): Quick montage showing the outcome/result for the user.
+4. CTA (15%): Clear call to action.`,
+
+  tutorial: `TUTORIAL NARRATIVE — step by step how-to:
+1. PROBLEM STATEMENT (15%): Show the task/problem to be solved.
+2. STEP SHOTS (60%): Each step shown clearly. App on phone, reference uploaded images. Number each step with a text overlay.
+3. RESULT (15%): The completed outcome.
+4. CTA (10%): Where to get it.`,
+
+  awareness: `BRAND AWARENESS NARRATIVE — emotional and aspirational:
+1. EMOTIONAL HOOK (30%): Evocative footage of the lifestyle or aspiration. No product.
+2. BRAND MOMENT (40%): Weave the product naturally into the lifestyle. Reference uploaded images.
+3. BRAND STATEMENT (20%): Key message/tagline as text overlay.
+4. SOFT CTA (10%): Low-pressure call to action.`,
+};
 
 function buildSystemPrompt(
   platform: PlatformId,
   contentType: ContentType,
+  purpose: ContentPurpose,
   brand: string,
   goal: string,
   imageCount: number,
 ): string {
+  const spec = PLATFORM_SPECS[platform];
+  const narrative = NARRATIVE_STRUCTURES[purpose];
   const isVideo = ['video', 'short', 'reel', 'story'].includes(contentType);
 
-  return `You are a professional social media content director. Your job is to create a detailed production blueprint for AI-generated content.
+  return `You are an expert video advertising director and storyboard artist with 20 years of experience creating high-converting short-form social media ads. You understand cinematography, pacing, and what makes people stop scrolling.
 
-The user wants to create content for: ${platform.toUpperCase()}
+=== PROJECT BRIEF ===
+Platform: ${platform.toUpperCase()}
 Content type: ${contentType}
-Brand/Subject: ${brand}
+Purpose: ${purpose.toUpperCase()}
+Brand/Product: ${brand}
 Goal/Theme: ${goal}
-Number of uploaded reference images: ${imageCount}
+Uploaded brand images available: ${imageCount} (${imageCount === 0 ? 'none — generate all visuals' : `use sourceImageIndex 0–${imageCount - 1} for any shot showing the app/product`})
 
-${
-  isVideo
-    ? `For video content, design a production blueprint with:
-- Between 5 and 8 video_clip segments (each 2–5 seconds for shorts/reels, 3–8 seconds for full video)
-- Exactly 1 voiceover track with the exact script, timing, and a voice description (accent + gender)
-- 2–4 text_overlay cards showing key text at specific timestamps
-- 0 or 1 caption for the post description
+=== PLATFORM REQUIREMENTS ===
+${spec.notes}
+Total video target length: ${spec.optimalSeconds} seconds (HARD LIMIT — sum of all clip durations must not exceed ${spec.optimalSeconds} seconds)
 
-Each video_clip must have a vivid, detailed Replicate AI prompt (for model minimax/video-01 or luma/dream-machine).
-If an uploaded reference image is available, instruct the AI to use it by referencing sourceImageIndex (0-based).
+=== NARRATIVE STRUCTURE TO FOLLOW ===
+${isVideo ? narrative : ''}
+${!isVideo && contentType === 'image_post' ? `Create a single striking image + caption. The image should convey the core value proposition visually. Caption should include a hook, key benefit, and CTA with hashtags.` : ''}
+${!isVideo && contentType === 'text_post' ? `Write compelling post copy. Lead with a hook or insight. Explain the value. End with CTA. Include relevant hashtags.` : ''}
 
-Voiceover: write the complete spoken script. Specify duration in seconds. Specify voice accent (e.g. "British RP", "American Midwest") and gender.
-Text overlays: specify exact text, start/end timestamps (in seconds from video start), brief description.`
-    : contentType === 'image_post'
-    ? `For an image post, design a blueprint with:
-- Exactly 1 image clip with a detailed Replicate AI image prompt (for model black-forest-labs/flux-1.1-pro)
-- If an uploaded reference image exists, reference it as the style/subject base using sourceImageIndex
-- Exactly 1 caption clip with the complete post copy including hashtags and a call to action`
-    : `For a text post, design a blueprint with:
-- Exactly 1 caption clip with the complete post copy tailored for ${platform}, including any hashtags and a call to action`
-}
+=== CRITICAL RULES FOR VIDEO CLIP PROMPTS ===
+These rules will save money and produce usable results:
 
-Respond ONLY with a valid JSON array of blueprint clips. Each clip must match this TypeScript interface:
+1. NEVER use the brand name or app name in the video_clip prompt. Replicate AI has NO knowledge of "${brand}". If you write "${brand}" in a clip prompt, the AI will generate nonsense.
+
+2. Instead, describe EXACTLY what is visually on screen: camera angle, subject, action, lighting, mood, duration.
+   BAD: "Generate a clip of the ${brand} app with its features"  
+   GOOD: "Close-up of a person's hand holding an iPhone, finger tapping a glowing bookmark icon, soft warm studio lighting, 1 second"
+
+3. For any shot showing the app/product UI — you MUST use sourceImageIndex to reference an uploaded screenshot. Do not ask Replicate to invent the UI.
+
+4. Clip durations for ads must be SHORT: 1–2 seconds for cutaway shots, 2–3 seconds for key moments, 3–4 seconds maximum for the most important shots. A typical ${spec.optimalSeconds}s ad has ${Math.round(spec.optimalSeconds / 1.5)} individual cuts.
+
+5. Always specify: camera angle + subject + action + lighting/mood + duration in the prompt.
+
+6. For iPhone/app shots: "A person's hand holding an iPhone [in portrait/landscape], [action], [lighting]" — do NOT say "${brand} app", say "the app interface shown on screen" and use sourceImageIndex.
+
+7. The voiceover script must be natural spoken language at a conversational pace. At ~130 words/minute: ${spec.optimalSeconds} seconds = ~${Math.round(spec.optimalSeconds * 130 / 60)} words maximum.
+
+=== OUTPUT FORMAT ===
+Respond with ONLY a raw JSON array. No explanation. No markdown. No code fences. Start with [ and end with ].
+
+Each object must have:
 {
-  id: string,            // unique, e.g. "clip-1", "vo-1", "overlay-1", "caption-1"
-  type: "video_clip" | "image" | "voiceover" | "text_overlay" | "caption",
-  label: string,         // human-readable, e.g. "Clip 1 – Couple browsing brochure"
-  prompt: string,        // complete AI prompt / instructions
-  duration?: number,     // seconds (video_clip, voiceover only)
-  timing?: { start: number, end: number },  // for text_overlay, in seconds
-  voice?: { accent: string, gender: string },  // for voiceover
-  sourceImageIndex?: number,   // 0-based index of uploaded image to use, if applicable
-  status: "pending"
+  "id": "unique string e.g. clip-1, vo-1, overlay-1, caption-1",
+  "type": "video_clip" | "image" | "voiceover" | "text_overlay" | "caption",
+  "label": "human readable e.g. Hook – Person scrolling frustrated",
+  "prompt": "complete detailed instructions",
+  "duration": number in seconds (video_clip and voiceover only),
+  "timing": { "start": number, "end": number } (text_overlay only, seconds from start),
+  "voice": { "accent": "e.g. British RP", "gender": "female" } (voiceover only),
+  "sourceImageIndex": number (ONLY when referencing an uploaded image, 0-based),
+  "status": "pending"
+}`;
 }
 
-Do not include any explanation — return only the JSON array.`;
+function extractJson(raw: string): BlueprintClip[] | null {
+  const stripped = raw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+
+  try {
+    const parsed = JSON.parse(stripped);
+    if (Array.isArray(parsed)) return parsed;
+    const values = Object.values(parsed);
+    if (values.length > 0 && Array.isArray(values[0])) return values[0] as BlueprintClip[];
+  } catch { /* fall through */ }
+
+  const match = stripped.match(/\[[\s\S]*\]/);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[0]);
+      if (Array.isArray(parsed)) return parsed;
+    } catch { /* fall through */ }
+  }
+
+  return null;
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const { platform, contentType, brand, goal, imageCount } = await req.json() as {
+    const { platform, contentType, purpose, brand, goal, imageCount } = await req.json() as {
       platform: PlatformId;
       contentType: ContentType;
+      purpose: ContentPurpose;
       brand: string;
       goal: string;
       imageCount: number;
@@ -80,30 +149,34 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    const systemPrompt = buildSystemPrompt(platform, contentType, brand, goal, imageCount);
+    const systemPrompt = buildSystemPrompt(platform, contentType, purpose ?? 'ad', brand, goal, imageCount);
+    const replicate = getReplicate();
 
-    const completion = await getClient().chat.completions.create({
-      model: MODEL,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Create the content blueprint for: ${brand} — ${goal}` },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.8,
+    const output = await replicate.run(LLM_MODEL, {
+      input: {
+        system_prompt: systemPrompt,
+        prompt: `Create the storyboard JSON array for: "${brand}" — "${goal}". Follow the narrative structure exactly. Remember: output ONLY the JSON array starting with [`,
+        max_tokens: 4096,
+        temperature: 0.7,
+      },
     });
 
-    const raw = completion.choices[0]?.message?.content ?? '[]';
+    let raw = '';
+    if (output && Symbol.asyncIterator in Object(output)) {
+      for await (const chunk of output as AsyncIterable<string>) {
+        raw += chunk;
+      }
+    } else {
+      raw = Array.isArray(output) ? (output as string[]).join('') : String(output);
+    }
 
-    // The model may wrap the array in an object key
-    let parsed: BlueprintClip[];
-    try {
-      const obj = JSON.parse(raw);
-      parsed = Array.isArray(obj) ? obj : (obj.clips ?? obj.blueprint ?? Object.values(obj)[0]);
-    } catch {
+    console.log('[storyboard] raw response (first 600 chars):', raw.slice(0, 600));
+
+    const parsed = extractJson(raw);
+    if (!parsed) {
       return NextResponse.json({ error: 'Failed to parse AI response', raw }, { status: 500 });
     }
 
-    // Ensure every clip has status: pending and a unique id
     const clips: BlueprintClip[] = parsed.map((clip, i) => ({
       ...clip,
       id: clip.id ?? `clip-${i + 1}`,
@@ -112,7 +185,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ clips });
   } catch (err) {
-    console.error('[blueprint]', err);
+    console.error('[storyboard]', err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }

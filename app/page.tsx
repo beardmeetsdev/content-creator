@@ -4,7 +4,14 @@ import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { saveJob } from '@/lib/storage';
 import { PLATFORMS, CONTENT_TYPE_INFO } from '@/lib/platforms';
-import { PlatformId, ContentType, UploadedImage, ContentJob } from '@/types';
+import { PlatformId, ContentType, ContentPurpose, UploadedImage, ContentJob } from '@/types';
+
+const PURPOSES: { id: ContentPurpose; icon: string; label: string; description: string }[] = [
+  { id: 'ad',        icon: '📢', label: 'Advertisement',    description: 'Drive downloads or sales — Hook → Problem → Solution → CTA' },
+  { id: 'showcase',  icon: '🎯', label: 'Product Showcase', description: 'Demonstrate features and benefits in detail' },
+  { id: 'tutorial',  icon: '💡', label: 'Tutorial / How-to', description: 'Step-by-step guide showing the product in action' },
+  { id: 'awareness', icon: '🌟', label: 'Brand Awareness',  description: 'Emotional, aspirational — build the brand feeling' },
+];
 
 export default function Home() {
   const router = useRouter();
@@ -12,6 +19,7 @@ export default function Home() {
 
   const [selectedPlatform, setSelectedPlatform] = useState<PlatformId | null>(null);
   const [selectedContentType, setSelectedContentType] = useState<ContentType | null>(null);
+  const [selectedPurpose, setSelectedPurpose] = useState<ContentPurpose | null>(null);
   const [brand, setBrand] = useState('');
   const [goal, setGoal] = useState('');
   const [images, setImages] = useState<UploadedImage[]>([]);
@@ -25,12 +33,12 @@ export default function Home() {
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
-    files.forEach((file, i) => {
+    files.forEach((file) => {
       const reader = new FileReader();
       reader.onload = (ev) => {
         setImages((prev) => [
           ...prev,
-          { name: file.name, dataUrl: ev.target?.result as string, index: prev.length + i },
+          { name: file.name, dataUrl: ev.target?.result as string, index: prev.length },
         ]);
       };
       reader.readAsDataURL(file);
@@ -40,17 +48,17 @@ export default function Home() {
 
   function removeImage(index: number) {
     setImages((prev) =>
-      prev
-        .filter((img) => img.index !== index)
-        .map((img, i) => ({ ...img, index: i }))
+      prev.filter((img) => img.index !== index).map((img, i) => ({ ...img, index: i }))
     );
   }
 
-  const canGo =
-    selectedPlatform !== null &&
-    selectedContentType !== null &&
-    brand.trim().length > 0 &&
-    goal.trim().length > 0;
+  const step = !selectedPlatform ? 1
+    : !selectedContentType ? 2
+    : !selectedPurpose ? 3
+    : !brand.trim() ? 4
+    : 5;
+
+  const canGo = selectedPlatform && selectedContentType && selectedPurpose && brand.trim() && goal.trim();
 
   function handleGo() {
     if (!canGo) return;
@@ -58,6 +66,7 @@ export default function Home() {
       id: Date.now().toString(),
       platform: selectedPlatform!,
       contentType: selectedContentType!,
+      purpose: selectedPurpose!,
       brand: brand.trim(),
       goal: goal.trim(),
       uploadedImages: images,
@@ -76,16 +85,14 @@ export default function Home() {
           Content Creator
         </h1>
         <p className="text-neutral-400 text-lg">
-          Describe your content idea and let AI build the full production blueprint — then generate every asset with one click.
+          Describe your content idea and AI will build a complete production storyboard — then generate every asset with one click.
         </p>
       </div>
 
       <div className="space-y-8">
         {/* Step 1: Platform */}
         <section>
-          <label className="block text-sm font-semibold text-neutral-300 mb-3 uppercase tracking-wider">
-            1 · Choose Platform
-          </label>
+          <StepLabel n={1} label="Choose Platform" active={step >= 1} />
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {PLATFORMS.map((p) => {
               const active = selectedPlatform === p.id;
@@ -94,9 +101,8 @@ export default function Home() {
                   key={p.id}
                   onClick={() => handlePlatformSelect(p.id)}
                   className={`flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-all ${
-                    active
-                      ? 'border-pink-500 bg-pink-500/10 text-pink-300'
-                      : 'border-neutral-700 bg-neutral-900 text-neutral-400 hover:border-neutral-500'
+                    active ? 'border-pink-500 bg-pink-500/10 text-pink-300'
+                           : 'border-neutral-700 bg-neutral-900 text-neutral-400 hover:border-neutral-500'
                   }`}
                 >
                   <span className="text-2xl">{p.icon}</span>
@@ -113,9 +119,7 @@ export default function Home() {
         {/* Step 2: Content Type */}
         {platform && (
           <section>
-            <label className="block text-sm font-semibold text-neutral-300 mb-3 uppercase tracking-wider">
-              2 · Content Type
-            </label>
+            <StepLabel n={2} label="Content Type" active={step >= 2} />
             <div className="grid grid-cols-2 gap-2">
               {platform.contentTypes.map((ct) => {
                 const info = CONTENT_TYPE_INFO[ct];
@@ -125,9 +129,8 @@ export default function Home() {
                     key={ct}
                     onClick={() => setSelectedContentType(ct)}
                     className={`px-4 py-3 rounded-xl border text-left transition-all ${
-                      active
-                        ? 'border-orange-500 bg-orange-500/10 text-orange-300'
-                        : 'border-neutral-700 bg-neutral-900 text-neutral-400 hover:border-neutral-500'
+                      active ? 'border-orange-500 bg-orange-500/10 text-orange-300'
+                             : 'border-neutral-700 bg-neutral-900 text-neutral-400 hover:border-neutral-500'
                     }`}
                   >
                     <div className="font-semibold text-sm">{info.label}</div>
@@ -139,42 +142,67 @@ export default function Home() {
           </section>
         )}
 
-        {/* Step 3: Brand + Goal */}
+        {/* Step 3: Purpose */}
         {selectedContentType && (
+          <section>
+            <StepLabel n={3} label="Purpose" active={step >= 3} />
+            <div className="grid grid-cols-1 gap-2">
+              {PURPOSES.map((p) => {
+                const active = selectedPurpose === p.id;
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => setSelectedPurpose(p.id)}
+                    className={`flex items-center gap-4 px-4 py-3 rounded-xl border text-left transition-all ${
+                      active ? 'border-purple-500 bg-purple-500/10 text-purple-300'
+                             : 'border-neutral-700 bg-neutral-900 text-neutral-400 hover:border-neutral-500'
+                    }`}
+                  >
+                    <span className="text-2xl">{p.icon}</span>
+                    <div>
+                      <div className="font-semibold text-sm">{p.label}</div>
+                      <div className="text-xs text-neutral-500">{p.description}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* Steps 4 & 5: Brand + Goal */}
+        {selectedPurpose && (
           <>
             <section>
-              <label className="block text-sm font-semibold text-neutral-300 mb-3 uppercase tracking-wider">
-                3 · Brand / Subject
-              </label>
+              <StepLabel n={4} label="Brand / Product Name" active={step >= 4} />
               <input
                 type="text"
                 value={brand}
                 onChange={(e) => setBrand(e.target.value)}
-                placeholder="e.g. Star Galaxy Granite, BookMaster App, Nike Air Max…"
+                placeholder="e.g. ClipSave, Star Galaxy Granite, Nike Air Max…"
                 className="w-full bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3 text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-pink-500 transition-colors"
               />
             </section>
 
             <section>
-              <label className="block text-sm font-semibold text-neutral-300 mb-3 uppercase tracking-wider">
-                4 · Goal / Theme
-              </label>
+              <StepLabel n={5} label="Goal / Theme" active={step >= 5} />
+              <p className="text-xs text-neutral-500 mb-2">
+                Describe what the content should achieve and what the product does. The more detail, the better the storyboard.
+              </p>
               <textarea
                 value={goal}
                 onChange={(e) => setGoal(e.target.value)}
-                rows={3}
-                placeholder="e.g. Showcase the worktop to new kitchen renovation prospects&#10;e.g. Show reasons why this app saves time for busy parents&#10;e.g. Announce the summer sale with an emotional lifestyle feel"
+                rows={4}
+                placeholder="e.g. Wishing to save short form video clips to view later? Save recipes, holidays, film recommendations etc. Now you can with ClipSave.&#10;&#10;e.g. Showcase the Star Galaxy Granite worktop to new kitchen renovation prospects — emphasise the natural stone texture and premium feel."
                 className="w-full bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3 text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-pink-500 transition-colors resize-none"
               />
             </section>
 
-            {/* Step 4: Optional images */}
+            {/* Step 6: Images */}
             <section>
-              <label className="block text-sm font-semibold text-neutral-300 mb-1 uppercase tracking-wider">
-                5 · Reference Images <span className="text-neutral-500 font-normal normal-case">(optional)</span>
-              </label>
+              <StepLabel n={6} label="Brand Images / Screenshots" active />
               <p className="text-xs text-neutral-500 mb-3">
-                Upload photos to use as source material — e.g. a product shot that AI will transform into video clips.
+                Upload app screenshots, product photos, or brand assets. These will be referenced in the storyboard for any shot showing your product — the AI will not invent your UI.
               </p>
 
               {images.length > 0 && (
@@ -187,15 +215,15 @@ export default function Home() {
                         alt={img.name}
                         className="w-20 h-20 object-cover rounded-lg border border-neutral-700"
                       />
+                      <div className="absolute top-0 left-0 bg-black/60 text-white text-xs px-1 rounded-tl-lg rounded-br-lg">
+                        {img.index + 1}
+                      </div>
                       <button
                         onClick={() => removeImage(img.index)}
                         className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-600 rounded-full text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                       >
                         ×
                       </button>
-                      <div className="text-xs text-neutral-500 mt-1 text-center w-20 truncate">
-                        Image {img.index + 1}
-                      </div>
                     </div>
                   ))}
                 </div>
@@ -207,14 +235,7 @@ export default function Home() {
               >
                 <span>＋</span> Add images
               </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                onChange={handleFileChange}
-                className="hidden"
-              />
+              <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={handleFileChange} className="hidden" />
             </section>
           </>
         )}
@@ -225,9 +246,20 @@ export default function Home() {
           disabled={!canGo}
           className="w-full bg-gradient-to-r from-pink-600 to-orange-600 hover:from-pink-500 hover:to-orange-500 disabled:opacity-30 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl text-lg transition-all transform hover:scale-[1.01] active:scale-[0.99]"
         >
-          Generate Blueprint →
+          Generate Storyboard →
         </button>
       </div>
+    </div>
+  );
+}
+
+function StepLabel({ n, label, active }: { n: number; label: string; active: boolean }) {
+  return (
+    <div className="flex items-center gap-2 mb-3">
+      <span className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center ${active ? 'bg-pink-600 text-white' : 'bg-neutral-800 text-neutral-500'}`}>
+        {n}
+      </span>
+      <span className={`text-sm font-semibold uppercase tracking-wider ${active ? 'text-neutral-300' : 'text-neutral-600'}`}>{label}</span>
     </div>
   );
 }

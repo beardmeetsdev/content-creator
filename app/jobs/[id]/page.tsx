@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { getJob, saveJob } from '@/lib/storage';
 import { getPlatform, CONTENT_TYPE_INFO } from '@/lib/platforms';
+import { VIDEO_MODELS, IMAGE_MODELS, DEFAULT_VIDEO_MODEL, getPlatformAspectRatio } from '@/lib/models';
 import { ContentJob, BlueprintClip } from '@/types';
 
 // ─── Clip card ──────────────────────────────────────────────────────────────
@@ -153,9 +154,11 @@ function StatusBadge({ status }: { status: string }) {
 export default function JobPage() {
   const { id } = useParams<{ id: string }>();
   const [job, setJob] = useState<ContentJob | null>(null);
-  const [generatingBlueprint, setGeneratingBlueprint] = useState(false);
-  const [blueprintError, setBlueprintError] = useState('');
+  const [generatingStoryboard, setGeneratingStoryboard] = useState(false);
+  const [storyboardError, setStoryboardError] = useState('');
   const [creating, setCreating] = useState(false);
+  const [videoModel, setVideoModel] = useState(DEFAULT_VIDEO_MODEL);
+  const [imageModel, setImageModel] = useState(IMAGE_MODELS[0].id);
 
   useEffect(() => {
     const j = getJob(id);
@@ -167,11 +170,11 @@ export default function JobPage() {
     setJob({ ...updated });
   }
 
-  // ── Blueprint generation ──────────────────────────────────────────────────
-  async function generateBlueprint() {
+  // ── Storyboard generation ──────────────────────────────────────────────────
+  async function generateStoryboard() {
     if (!job) return;
-    setGeneratingBlueprint(true);
-    setBlueprintError('');
+    setGeneratingStoryboard(true);
+    setStoryboardError('');
     try {
       const res = await fetch('/api/blueprint', {
         method: 'POST',
@@ -179,6 +182,7 @@ export default function JobPage() {
         body: JSON.stringify({
           platform: job.platform,
           contentType: job.contentType,
+          purpose: job.purpose ?? 'ad',
           brand: job.brand,
           goal: job.goal,
           imageCount: job.uploadedImages.length,
@@ -188,9 +192,9 @@ export default function JobPage() {
       if (!res.ok || data.error) throw new Error(data.error ?? 'Unknown error');
       persist({ ...job, blueprint: data.clips });
     } catch (err) {
-      setBlueprintError(String(err));
+      setStoryboardError(String(err));
     } finally {
-      setGeneratingBlueprint(false);
+      setGeneratingStoryboard(false);
     }
   }
 
@@ -217,7 +221,7 @@ export default function JobPage() {
         const res = await fetch('/api/generate-clip', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clip, sourceImageDataUrl: sourceImage }),
+          body: JSON.stringify({ clip, sourceImageDataUrl: sourceImage, videoModelId: videoModel, imageModelId: imageModel, platform: job.platform, contentType: job.contentType }),
         });
         const data = await res.json() as { resultUrl?: string; resultText?: string; error?: string };
         if (!res.ok || data.error) throw new Error(data.error ?? 'Unknown error');
@@ -307,6 +311,7 @@ export default function JobPage() {
 
   const platform = getPlatform(job.platform);
   const ctInfo = CONTENT_TYPE_INFO[job.contentType];
+  const aspectRatio = getPlatformAspectRatio(job.platform, job.contentType);
   const doneCount = job.blueprint?.filter((c) => c.status === 'done').length ?? 0;
   const totalCount = job.blueprint?.length ?? 0;
   const allMediaDone =
@@ -349,39 +354,101 @@ export default function JobPage() {
         )}
       </div>
 
-      {/* Blueprint section */}
+      {/* Storyboard section */}
+      {/* Model selector — always visible */}
+      <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-5 mb-6">
+        <h3 className="text-sm font-semibold text-neutral-300 uppercase tracking-wider mb-1">🎬 AI Generation Models</h3>
+        <p className="text-xs text-neutral-500 mb-4">
+          Output format: <span className="text-orange-400 font-semibold">{aspectRatio}</span> · 
+          Experiment with the budget model first, switch to premium only once your prompts are finalised.
+        </p>
+        <div className="grid gap-3 mb-3">
+          <div>
+            <label className="text-xs text-neutral-400 mb-1 block">Video clips model</label>
+            <div className="grid gap-2">
+              {VIDEO_MODELS.map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => setVideoModel(m.id)}
+                  className={`flex items-start gap-3 px-3 py-2.5 rounded-xl border text-left transition-all ${
+                    videoModel === m.id
+                      ? 'border-pink-500 bg-pink-500/10'
+                      : 'border-neutral-700 hover:border-neutral-500'
+                  }`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs font-bold ${videoModel === m.id ? 'text-pink-300' : 'text-neutral-300'}`}>{m.name}</span>
+                      <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${
+                        m.tier === 'budget' ? 'bg-green-900/60 text-green-300'
+                        : m.tier === 'standard' ? 'bg-yellow-900/60 text-yellow-300'
+                        : 'bg-red-900/60 text-red-300'
+                      }`}>{m.costPerClip}</span>
+                      {m.recommended && <span className="text-xs text-blue-400">★ {m.recommended}</span>}
+                    </div>
+                    <p className="text-xs text-neutral-500 mt-0.5 leading-tight">{m.description}</p>
+                    <div className="flex gap-2 mt-1">
+                      {m.supportsAspectRatio && <span className="text-xs text-green-500">✓ Aspect ratio</span>}
+                      {m.supportsImageInput && <span className="text-xs text-blue-400">✓ Image input</span>}
+                      {!m.supportsAspectRatio && <span className="text-xs text-neutral-600">✗ No aspect ratio control</span>}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-neutral-400 mb-1 block">Image model</label>
+            <div className="flex gap-2">
+              {IMAGE_MODELS.map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => setImageModel(m.id)}
+                  className={`flex-1 px-3 py-2 rounded-xl border text-left transition-all ${
+                    imageModel === m.id ? 'border-orange-500 bg-orange-500/10' : 'border-neutral-700 hover:border-neutral-500'
+                  }`}
+                >
+                  <div className={`text-xs font-bold ${imageModel === m.id ? 'text-orange-300' : 'text-neutral-300'}`}>{m.name}</div>
+                  <div className="text-xs text-neutral-500">{m.costPerImage} · {m.description}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
       {!job.blueprint ? (
         <div className="text-center py-16">
           <div className="text-5xl mb-4">🤖</div>
-          <h2 className="text-xl font-bold mb-2">No blueprint yet</h2>
+          <h2 className="text-xl font-bold mb-2">No storyboard yet</h2>
           <p className="text-neutral-400 text-sm mb-6">
-            Click below to let AI design the production blueprint for your content.
+            Click below to let AI design the production storyboard for your content.
           </p>
-          {blueprintError && (
-            <p className="text-red-400 text-sm mb-4">{blueprintError}</p>
+          {storyboardError && (
+            <p className="text-red-400 text-sm mb-4">{storyboardError}</p>
           )}
           <button
-            onClick={generateBlueprint}
-            disabled={generatingBlueprint}
+            onClick={generateStoryboard}
+            disabled={generatingStoryboard}
             className="bg-gradient-to-r from-pink-600 to-orange-600 hover:from-pink-500 hover:to-orange-500 disabled:opacity-40 text-white font-bold px-8 py-4 rounded-xl text-lg transition-all"
           >
-            {generatingBlueprint ? '✨ Generating Blueprint…' : '✨ Generate Blueprint'}
+            {generatingStoryboard ? '✨ Generating Storyboard…' : '✨ Generate Storyboard'}
           </button>
         </div>
       ) : (
         <>
-          {/* Blueprint header */}
+          {/* Storyboard header */}
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-lg font-bold">Production Blueprint</h2>
+              <h2 className="text-lg font-bold">Production Storyboard</h2>
               <p className="text-xs text-neutral-500 mt-0.5">
                 {doneCount}/{totalCount} clips generated
               </p>
             </div>
             <div className="flex gap-2">
               <button
-                onClick={generateBlueprint}
-                disabled={generatingBlueprint}
+                onClick={generateStoryboard}
+                disabled={generatingStoryboard}
                 className="text-sm px-3 py-1.5 rounded-lg border border-neutral-700 text-neutral-400 hover:border-neutral-500 hover:text-neutral-200 disabled:opacity-40 transition-all"
               >
                 ↺ Rebuild

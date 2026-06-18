@@ -23,6 +23,8 @@ export type ClipType =
 
 export type ClipStatus = 'pending' | 'generating' | 'done' | 'error';
 
+export type ContentPurpose = 'ad' | 'showcase' | 'tutorial' | 'awareness';
+
 export interface Platform {
   id: PlatformId;
   name: string;
@@ -62,10 +64,13 @@ export interface ContentJob {
   id: string;
   platform: PlatformId;
   contentType: ContentType;
+  purpose: ContentPurpose;
   brand: string;
   goal: string;
   uploadedImages: UploadedImage[];
   createdAt: string;
+  selectedVideoModel?: string;
+  selectedImageModel?: string;
   blueprint?: BlueprintClip[];
   finalOutputUrl?: string;
 }
