@@ -212,11 +212,14 @@ export async function POST(req: NextRequest) {
     }
 
     if (clip.type === 'voiceover') {
-      const output = await replicate.run('jaaari/kokoro-82m', {
+      const isMale = clip.voice?.gender?.toLowerCase() === 'male';
+      const voice = isMale ? 'Atlas' : 'Luna';
+      const output = await replicate.run('resemble-ai/chatterbox-pro', {
         input: {
-          text: clip.prompt,
-          voice: clip.voice?.accent?.toLowerCase().includes('british') ? 'bf_emma' : 'af_sky',
-          speed: 1.0,
+          prompt: clip.prompt,
+          voice,
+          temperature: 0.7,
+          exaggeration: 0.5,
         },
       });
       const replicateUrl = extractUrl(output);
