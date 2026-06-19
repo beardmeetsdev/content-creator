@@ -13,15 +13,19 @@ import { ContentJob, BlueprintClip } from '@/types';
 function ClipCard({
   clip,
   job,
+  modelId,
   onGenerate,
   onPromptChange,
   onImageChange,
+  onModelChange,
 }: {
   clip: BlueprintClip;
   job: ContentJob;
+  modelId: string;
   onGenerate: (clipId: string) => void;
   onPromptChange: (clipId: string, newPrompt: string) => void;
   onImageChange: (clipId: string, newIndex: number | undefined) => void;
+  onModelChange: (clipId: string, newModelId: string) => void;
 }) {
   const typeIcons: Record<string, string> = {
     video_clip: '🎞️',
@@ -33,6 +37,8 @@ function ClipCard({
 
   const icon = typeIcons[clip.type] ?? '📦';
   const isMedia = clip.type === 'video_clip' || clip.type === 'image' || clip.type === 'voiceover';
+  const models = clip.type === 'video_clip' ? VIDEO_MODELS : clip.type === 'image' ? IMAGE_MODELS : [];
+  const selectedModel = models.find((m) => m.id === modelId) ?? models[0];
 
   return (
     <div
@@ -62,7 +68,28 @@ function ClipCard({
         <StatusBadge status={clip.status} />
       </div>
 
-      {/* Image selector — shown for clips that support it */}
+      {/* Per-clip model selector — only for video and image clips */}
+      {models.length > 0 && (
+        <div className="mb-3">
+          <select
+            value={modelId}
+            onChange={(e) => onModelChange(clip.id, e.target.value)}
+            className="w-full text-xs bg-neutral-800 border border-neutral-700 rounded-lg px-2 py-1.5 text-neutral-300 focus:outline-none focus:border-pink-500"
+          >
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {'costPerClip' in m ? m.costPerClip : (m as {costPerImage: string}).costPerImage} · {m.name}
+                {m === models[0] ? ' (default)' : ''}
+              </option>
+            ))}
+          </select>
+          {selectedModel && (
+            <p className="text-xs text-neutral-600 mt-1 leading-tight">{selectedModel.description}</p>
+          )}
+        </div>
+      )}
+
+      {/* Image selector — for video and image clips */}
       {(clip.type === 'video_clip' || clip.type === 'image') && job.uploadedImages.length > 0 && (
         <div className="flex items-center gap-2 mb-3">
           <label className="text-xs text-neutral-500 shrink-0">Source image:</label>
@@ -171,6 +198,12 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={`text-xs px-2 py-1 rounded-full font-medium ${s.class}`}>{s.label}</span>;
 }
 
+// Returns the correct default model ID for a given clip type
+function defaultModelForClip(type: string): string {
+  if (type === 'image') return IMAGE_MODELS[0].id;
+  return DEFAULT_VIDEO_MODEL;
+}
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function JobPage() {
@@ -180,20 +213,24 @@ export default function JobPage() {
   const [storyboardError, setStoryboardError] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
-  const [videoModel, setVideoModel] = useState(DEFAULT_VIDEO_MODEL);
-  const [imageModel, setImageModel] = useState(IMAGE_MODELS[0].id);
+  // Per-clip model selection: clipId → modelId
+  const [clipModels, setClipModels] = useState<Record<string, string>>({});
 
   useEffect(() => {
     const j = getJob(id);
     setJob(j ?? null);
   }, [id]);
 
+  // Get the model ID for a specific clip, falling back to the default for its type
+  function getClipModel(clipId: string, clipType: string): string {
+    return clipModels[clipId] ?? defaultModelForClip(clipType);
+  }
+
   function persist(updated: ContentJob) {
     saveJob(updated);
     setJob({ ...updated });
   }
 
-  // Update a single field on a clip and persist
   const updateClip = useCallback((clipId: string, updates: Partial<BlueprintClip>) => {
     setJob((prev) => {
       if (!prev?.blueprint) return prev;
@@ -225,6 +262,7 @@ export default function JobPage() {
       const data = await res.json() as { clips?: BlueprintClip[]; error?: string };
       if (!res.ok || data.error) throw new Error(data.error ?? 'Unknown error');
       persist({ ...job, blueprint: data.clips });
+      setClipModels({}); // reset to defaults when storyboard is rebuilt
     } catch (err) {
       setStoryboardError(String(err));
     } finally {
@@ -241,6 +279,7 @@ export default function JobPage() {
       if (clipIndex === -1) return;
 
       const clip = job.blueprint[clipIndex];
+      const modelId = clipModels[clipId] ?? defaultModelForClip(clip.type);
       const sourceImage =
         clip.sourceImageIndex !== undefined
           ? job.uploadedImages[clip.sourceImageIndex]?.dataUrl
@@ -254,7 +293,14 @@ export default function JobPage() {
         const res = await fetch('/api/generate-clip', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clip, sourceImageDataUrl: sourceImage, videoModelId: videoModel, imageModelId: imageModel, platform: job.platform, contentType: job.contentType }),
+          body: JSON.stringify({
+            clip,
+            sourceImageDataUrl: sourceImage,
+            videoModelId: clip.type === 'video_clip' ? modelId : undefined,
+            imageModelId: clip.type === 'image' ? modelId : undefined,
+            platform: job.platform,
+            contentType: job.contentType,
+          }),
         });
         const data = await res.json() as { resultUrl?: string; resultText?: string; error?: string };
         if (!res.ok || data.error) throw new Error(data.error ?? 'Unknown error');
@@ -275,7 +321,7 @@ export default function JobPage() {
 
       persist({ ...job, blueprint: updatedBlueprint });
     },
-    [job, videoModel, imageModel],
+    [job, clipModels],
   );
 
   // ── Generate ALL media clips ──────────────────────────────────────────────
@@ -335,7 +381,6 @@ export default function JobPage() {
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-12">
-      {/* Back */}
       <div className="mb-2">
         <Link href="/jobs" className="text-sm text-neutral-500 hover:text-neutral-300 transition-colors">
           ← All Jobs
@@ -343,13 +388,14 @@ export default function JobPage() {
       </div>
 
       {/* Job header */}
-      <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 mb-8">
+      <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 mb-6">
         <div className="flex items-center gap-3 mb-2">
           <span className="text-3xl">{platform?.icon}</span>
           <h1 className="text-2xl font-bold">{job.brand}</h1>
           <span className="text-xs bg-neutral-800 text-neutral-400 px-2 py-1 rounded-full">
             {platform?.name} · {ctInfo.label}
           </span>
+          <span className="text-xs text-orange-400 font-semibold">{aspectRatio}</span>
         </div>
         <p className="text-neutral-400 text-sm">{job.goal}</p>
         {job.uploadedImages.length > 0 && (
@@ -357,79 +403,12 @@ export default function JobPage() {
             {job.uploadedImages.map((img, i) => (
               <div key={img.index} className="relative">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={img.dataUrl}
-                  alt={img.name}
-                  className="w-14 h-14 object-cover rounded-lg border border-neutral-700"
-                />
+                <img src={img.dataUrl} alt={img.name} className="w-14 h-14 object-cover rounded-lg border border-neutral-700" />
                 <span className="absolute -top-1 -right-1 bg-neutral-700 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center font-bold">{i + 1}</span>
               </div>
             ))}
           </div>
         )}
-      </div>
-
-      {/* Model selector */}
-      <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-5 mb-6">
-        <h3 className="text-sm font-semibold text-neutral-300 uppercase tracking-wider mb-1">🎬 AI Generation Models</h3>
-        <p className="text-xs text-neutral-500 mb-4">
-          Output format: <span className="text-orange-400 font-semibold">{aspectRatio}</span> · 
-          Experiment with the budget model first, switch to premium only once your prompts are finalised.
-        </p>
-        <div className="grid gap-3 mb-3">
-          <div>
-            <label className="text-xs text-neutral-400 mb-1 block">Video clips model</label>
-            <div className="grid gap-2">
-              {VIDEO_MODELS.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => setVideoModel(m.id)}
-                  className={`flex items-start gap-3 px-3 py-2.5 rounded-xl border text-left transition-all ${
-                    videoModel === m.id
-                      ? 'border-pink-500 bg-pink-500/10'
-                      : 'border-neutral-700 hover:border-neutral-500'
-                  }`}
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className={`text-xs font-bold ${videoModel === m.id ? 'text-pink-300' : 'text-neutral-300'}`}>{m.name}</span>
-                      <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${
-                        m.tier === 'draft' ? 'bg-blue-900/60 text-blue-300'
-                        : m.tier === 'budget' ? 'bg-green-900/60 text-green-300'
-                        : m.tier === 'standard' ? 'bg-yellow-900/60 text-yellow-300'
-                        : 'bg-red-900/60 text-red-300'
-                      }`}>{m.costPerClip}</span>
-                      {m.recommended && <span className="text-xs text-blue-400">★ {m.recommended}</span>}
-                    </div>
-                    <p className="text-xs text-neutral-500 mt-0.5 leading-tight">{m.description}</p>
-                    <div className="flex gap-2 mt-1">
-                      {m.supportsAspectRatio && <span className="text-xs text-green-500">✓ Aspect ratio</span>}
-                      {m.supportsImageInput && <span className="text-xs text-blue-400">✓ Image input</span>}
-                      {!m.supportsAspectRatio && <span className="text-xs text-neutral-600">✗ No aspect ratio control</span>}
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <label className="text-xs text-neutral-400 mb-1 block">Image model</label>
-            <div className="flex gap-2">
-              {IMAGE_MODELS.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => setImageModel(m.id)}
-                  className={`flex-1 px-3 py-2 rounded-xl border text-left transition-all ${
-                    imageModel === m.id ? 'border-orange-500 bg-orange-500/10' : 'border-neutral-700 hover:border-neutral-500'
-                  }`}
-                >
-                  <div className={`text-xs font-bold ${imageModel === m.id ? 'text-orange-300' : 'text-neutral-300'}`}>{m.name}</div>
-                  <div className="text-xs text-neutral-500">{m.costPerImage} · {m.description}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
       </div>
 
       {!job.blueprint ? (
@@ -439,9 +418,7 @@ export default function JobPage() {
           <p className="text-neutral-400 text-sm mb-6">
             Click below to let AI design the production storyboard for your content.
           </p>
-          {storyboardError && (
-            <p className="text-red-400 text-sm mb-4">{storyboardError}</p>
-          )}
+          {storyboardError && <p className="text-red-400 text-sm mb-4">{storyboardError}</p>}
           <button
             onClick={generateStoryboard}
             disabled={generatingStoryboard}
@@ -452,13 +429,10 @@ export default function JobPage() {
         </div>
       ) : (
         <>
-          {/* Storyboard header */}
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-lg font-bold">Production Storyboard</h2>
-              <p className="text-xs text-neutral-500 mt-0.5">
-                {doneCount}/{totalCount} clips generated
-              </p>
+              <p className="text-xs text-neutral-500 mt-0.5">{doneCount}/{totalCount} clips generated</p>
             </div>
             <div className="flex gap-2">
               <button
@@ -477,25 +451,25 @@ export default function JobPage() {
             </div>
           </div>
 
-          {/* Clip grid */}
           <div className="grid gap-4 mb-8">
-            {job.blueprint.map((clip, i) => (
+            {job.blueprint.map((clip) => (
               <ClipCard
                 key={clip.id}
                 clip={clip}
                 job={job}
+                modelId={getClipModel(clip.id, clip.type)}
                 onGenerate={generateClip}
                 onPromptChange={(clipId, newPrompt) => updateClip(clipId, { prompt: newPrompt })}
                 onImageChange={(clipId, newIndex) => updateClip(clipId, { sourceImageIndex: newIndex })}
+                onModelChange={(clipId, newModelId) =>
+                  setClipModels((prev) => ({ ...prev, [clipId]: newModelId }))
+                }
               />
             ))}
           </div>
 
-          {/* CREATE button */}
           <div className="sticky bottom-6">
-            {createError && (
-              <p className="text-red-400 text-sm text-center mb-2">{createError}</p>
-            )}
+            {createError && <p className="text-red-400 text-sm text-center mb-2">{createError}</p>}
             <button
               onClick={handleCreate}
               disabled={creating || !allMediaDone}
@@ -511,7 +485,6 @@ export default function JobPage() {
             )}
           </div>
 
-          {/* Final output */}
           {job.finalOutputUrl && (
             <div className="mt-8 bg-green-950/40 border border-green-800 rounded-2xl p-6 text-center">
               <div className="text-4xl mb-3">🎉</div>
@@ -537,4 +510,6 @@ export default function JobPage() {
   );
 }
 
+
+// ─── Clip card ──────────────────────────────────────────────────────────────
 
