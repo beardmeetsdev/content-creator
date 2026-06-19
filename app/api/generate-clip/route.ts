@@ -3,9 +3,26 @@ import Replicate from 'replicate';
 import { BlueprintClip } from '@/types';
 import { getModelById, DEFAULT_VIDEO_MODEL, getPlatformAspectRatio, IMAGE_MODELS } from '@/lib/models';
 import type { PlatformId, ContentType } from '@/types';
+import { writeFile, mkdir } from 'fs/promises';
+import path from 'path';
+import crypto from 'crypto';
 
 function getReplicate() {
   return new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
+}
+
+// Downloads a Replicate URL and saves it to public/media/, returns the local /media/... URL.
+async function downloadAndSave(replicateUrl: string, clipType: string): Promise<string> {
+  const ext = clipType === 'voiceover' ? 'wav' : clipType === 'image' ? 'jpg' : 'mp4';
+  const filename = `${crypto.randomUUID()}.${ext}`;
+  const mediaDir = path.join(process.cwd(), 'public', 'media');
+  await mkdir(mediaDir, { recursive: true });
+
+  const res = await fetch(replicateUrl);
+  if (!res.ok) throw new Error(`Failed to download media: ${res.status}`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  await writeFile(path.join(mediaDir, filename), buffer);
+  return `/media/${filename}`;
 }
 
 function buildVideoInput(
@@ -156,7 +173,9 @@ export async function POST(req: NextRequest) {
         throw lastError;
       }
 
-      return NextResponse.json({ resultUrl: extractUrl(output) });
+      const replicateUrl = extractUrl(output);
+      const localUrl = await downloadAndSave(replicateUrl, 'video_clip');
+      return NextResponse.json({ resultUrl: localUrl });
     }
 
     if (clip.type === 'image') {
@@ -167,24 +186,22 @@ export async function POST(req: NextRequest) {
         output_format: 'jpg',
       };
       const output = await replicate.run(modelId as `${string}/${string}`, { input });
-      return NextResponse.json({ resultUrl: extractUrl(output) });
+      const replicateUrl = extractUrl(output);
+      const localUrl = await downloadAndSave(replicateUrl, 'image');
+      return NextResponse.json({ resultUrl: localUrl });
     }
 
     if (clip.type === 'voiceover') {
-      // Use kokoro-82m — much better quality TTS than suno-ai/bark
-      const voiceText = clip.voice
-        ? `${clip.prompt}`
-        : clip.prompt;
-
       const output = await replicate.run('jaaari/kokoro-82m', {
         input: {
-          text: voiceText,
-          // British RP = bf_emma, American = af_sky
+          text: clip.prompt,
           voice: clip.voice?.accent?.toLowerCase().includes('british') ? 'bf_emma' : 'af_sky',
           speed: 1.0,
         },
       });
-      return NextResponse.json({ resultUrl: extractUrl(output) });
+      const replicateUrl = extractUrl(output);
+      const localUrl = await downloadAndSave(replicateUrl, 'voiceover');
+      return NextResponse.json({ resultUrl: localUrl });
     }
 
     return NextResponse.json({ error: `Unknown clip type: ${clip.type}` }, { status: 400 });
