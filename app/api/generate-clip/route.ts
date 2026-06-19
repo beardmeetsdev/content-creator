@@ -13,6 +13,13 @@ function getReplicate() {
 
 // Downloads a Replicate URL and saves it to public/media/, returns the local /media/... URL.
 async function downloadAndSave(replicateUrl: string, clipType: string): Promise<string> {
+  if (!replicateUrl || replicateUrl === 'undefined' || replicateUrl === 'null') {
+    throw new Error(`No output URL returned from Replicate (got: "${replicateUrl}"). The model may have failed silently.`);
+  }
+  // Validate it's actually a URL before fetching
+  try { new URL(replicateUrl); } catch {
+    throw new Error(`Replicate returned an invalid URL: "${replicateUrl.slice(0, 200)}"`);
+  }
   const ext = clipType === 'voiceover' ? 'wav' : clipType === 'image' ? 'jpg' : 'mp4';
   const filename = `${crypto.randomUUID()}.${ext}`;
   const mediaDir = path.join(process.cwd(), 'public', 'media');
@@ -103,11 +110,24 @@ function buildVideoInput(
 }
 
 function extractUrl(output: unknown): string {
+  console.log('[extractUrl] raw output type:', typeof output, JSON.stringify(output)?.slice(0, 300));
   if (typeof output === 'string') return output;
-  if (Array.isArray(output) && output.length > 0) return String(output[0]);
+  // Replicate SDK wraps some outputs in a FileOutput object with a .url() method or .href
   if (output && typeof output === 'object') {
     const o = output as Record<string, unknown>;
-    return String(o.url ?? o.video ?? o.output ?? '');
+    // FileOutput: has .url() method
+    if (typeof o.url === 'function') {
+      try { return String((o.url as () => unknown)()); } catch { /* fallthrough */ }
+    }
+    // FileOutput: has .href string
+    if (typeof o.href === 'string') return o.href;
+    // Plain object with known keys
+    if (typeof o.url === 'string') return o.url;
+    if (typeof o.video === 'string') return o.video;
+    if (typeof o.output === 'string') return o.output;
+  }
+  if (Array.isArray(output) && output.length > 0) {
+    return extractUrl(output[0]);
   }
   return '';
 }
