@@ -88,13 +88,17 @@ These rules will save money and produce usable results:
 
 3. For any shot showing the app/product UI — you MUST use sourceImageIndex to reference an uploaded screenshot. Do not ask Replicate to invent the UI.
 
-4. Clip durations for ads must be SHORT: 1–2 seconds for cutaway shots, 2–3 seconds for key moments, 3–4 seconds maximum for the most important shots. A typical ${spec.optimalSeconds}s ad has ${Math.round(spec.optimalSeconds / 1.5)} individual cuts.
+4. YOU MUST USE ALL UPLOADED IMAGES. With ${imageCount} image(s) uploaded, you MUST include at least ${imageCount} clip(s) that each use a different sourceImageIndex (0 through ${imageCount - 1}). Spread them across the narrative — don't put them all together.
 
-5. Always specify: camera angle + subject + action + lighting/mood + duration in the prompt.
+5. Clip durations for ads must be SHORT: 1–2 seconds for cutaway shots, 2–3 seconds for key moments, 3–4 seconds maximum for the most important shots. A typical ${spec.optimalSeconds}s ad has ${Math.round(spec.optimalSeconds / 1.5)} individual cuts.
 
-6. For iPhone/app shots: "A person's hand holding an iPhone [in portrait/landscape], [action], [lighting]" — do NOT say "${brand} app", say "the app interface shown on screen" and use sourceImageIndex.
+6. Always specify: camera angle + subject + action + lighting/mood + duration in the prompt.
 
-7. The voiceover script must be natural spoken language at a conversational pace. At ~130 words/minute: ${spec.optimalSeconds} seconds = ~${Math.round(spec.optimalSeconds * 130 / 60)} words maximum.
+7. For iPhone/app shots: "A person's hand holding an iPhone [in portrait/landscape], [action], [lighting]" — do NOT say "${brand} app", say "the app interface shown on screen" and use sourceImageIndex.
+
+8. YOU MUST INCLUDE EXACTLY ONE voiceover clip. This is mandatory. The voiceover must cover the full ${spec.optimalSeconds} seconds. Script must be natural spoken language at a conversational pace. At ~130 words/minute: ${spec.optimalSeconds} seconds = ~${Math.round(spec.optimalSeconds * 130 / 60)} words maximum.
+
+9. YOU MUST INCLUDE at least 2 text_overlay clips — a hook at the start and a CTA at the end.
 
 === OUTPUT FORMAT ===
 Respond with ONLY a raw JSON array. No explanation. No markdown. No code fences. Start with [ and end with ].

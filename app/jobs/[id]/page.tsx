@@ -13,13 +13,15 @@ import { ContentJob, BlueprintClip } from '@/types';
 function ClipCard({
   clip,
   job,
-  index,
   onGenerate,
+  onPromptChange,
+  onImageChange,
 }: {
   clip: BlueprintClip;
   job: ContentJob;
-  index: number;
   onGenerate: (clipId: string) => void;
+  onPromptChange: (clipId: string, newPrompt: string) => void;
+  onImageChange: (clipId: string, newIndex: number | undefined) => void;
 }) {
   const typeIcons: Record<string, string> = {
     video_clip: '🎞️',
@@ -30,6 +32,7 @@ function ClipCard({
   };
 
   const icon = typeIcons[clip.type] ?? '📦';
+  const isMedia = clip.type === 'video_clip' || clip.type === 'image' || clip.type === 'voiceover';
 
   return (
     <div
@@ -59,22 +62,40 @@ function ClipCard({
         <StatusBadge status={clip.status} />
       </div>
 
-      {/* Source image indicator */}
-      {clip.sourceImageIndex !== undefined && job.uploadedImages[clip.sourceImageIndex] && (
+      {/* Image selector — shown for clips that support it */}
+      {(clip.type === 'video_clip' || clip.type === 'image') && job.uploadedImages.length > 0 && (
         <div className="flex items-center gap-2 mb-3">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={job.uploadedImages[clip.sourceImageIndex].dataUrl}
-            alt="source"
-            className="w-10 h-10 object-cover rounded-lg border border-neutral-700"
-          />
-          <span className="text-xs text-neutral-500">Uses Image {clip.sourceImageIndex + 1}</span>
+          <label className="text-xs text-neutral-500 shrink-0">Source image:</label>
+          <select
+            value={clip.sourceImageIndex ?? ''}
+            onChange={(e) => onImageChange(clip.id, e.target.value === '' ? undefined : Number(e.target.value))}
+            className="flex-1 text-xs bg-neutral-800 border border-neutral-700 rounded-lg px-2 py-1.5 text-neutral-300 focus:outline-none focus:border-pink-500"
+          >
+            <option value="">None — AI generates</option>
+            {job.uploadedImages.map((img, i) => (
+              <option key={i} value={i}>Image {i + 1} – {img.name}</option>
+            ))}
+          </select>
+          {clip.sourceImageIndex !== undefined && job.uploadedImages[clip.sourceImageIndex] && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={job.uploadedImages[clip.sourceImageIndex].dataUrl}
+              alt="preview"
+              className="w-10 h-10 object-cover rounded-lg border border-neutral-700 shrink-0"
+            />
+          )}
         </div>
       )}
 
-      {/* Prompt / instructions */}
-      <div className="bg-neutral-950 rounded-xl p-3 mb-3">
-        <p className="text-sm text-neutral-300 leading-relaxed whitespace-pre-wrap">{clip.prompt}</p>
+      {/* Editable prompt */}
+      <div className="mb-3">
+        <textarea
+          value={clip.prompt}
+          onChange={(e) => onPromptChange(clip.id, e.target.value)}
+          rows={3}
+          className="w-full bg-neutral-950 border border-neutral-800 focus:border-neutral-600 rounded-xl p-3 text-sm text-neutral-300 leading-relaxed resize-y focus:outline-none transition-colors"
+          placeholder="Prompt / instructions…"
+        />
         {clip.voice && (
           <p className="text-xs text-neutral-500 mt-1">
             Voice: {clip.voice.accent} · {clip.voice.gender}
@@ -122,7 +143,7 @@ function ClipCard({
       )}
 
       {/* Generate button */}
-      {(clip.type === 'video_clip' || clip.type === 'image' || clip.type === 'voiceover') && (
+      {isMedia && (
         <button
           onClick={() => onGenerate(clip.id)}
           disabled={clip.status === 'generating'}
@@ -158,6 +179,7 @@ export default function JobPage() {
   const [generatingStoryboard, setGeneratingStoryboard] = useState(false);
   const [storyboardError, setStoryboardError] = useState('');
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState('');
   const [videoModel, setVideoModel] = useState(DEFAULT_VIDEO_MODEL);
   const [imageModel, setImageModel] = useState(IMAGE_MODELS[0].id);
 
@@ -170,6 +192,17 @@ export default function JobPage() {
     saveJob(updated);
     setJob({ ...updated });
   }
+
+  // Update a single field on a clip and persist
+  const updateClip = useCallback((clipId: string, updates: Partial<BlueprintClip>) => {
+    setJob((prev) => {
+      if (!prev?.blueprint) return prev;
+      const updated = prev.blueprint.map((c) => c.id === clipId ? { ...c, ...updates } : c);
+      const next = { ...prev, blueprint: updated };
+      saveJob(next);
+      return next;
+    });
+  }, []);
 
   // ── Storyboard generation ──────────────────────────────────────────────────
   async function generateStoryboard() {
@@ -213,7 +246,6 @@ export default function JobPage() {
           ? job.uploadedImages[clip.sourceImageIndex]?.dataUrl
           : undefined;
 
-      // Mark as generating
       const updatedBlueprint = [...job.blueprint];
       updatedBlueprint[clipIndex] = { ...clip, status: 'generating' };
       persist({ ...job, blueprint: updatedBlueprint });
@@ -257,42 +289,22 @@ export default function JobPage() {
     }
   }
 
-  // ── CREATE (finalise) ─────────────────────────────────────────────────────
+  // ── CREATE — merge all clips into final video ─────────────────────────────
   async function handleCreate() {
     if (!job?.blueprint) return;
     setCreating(true);
+    setCreateError('');
     try {
-      // Resolve all text-only clips
-      const updated = job.blueprint.map((clip) => {
-        if ((clip.type === 'text_overlay' || clip.type === 'caption') && clip.status === 'pending') {
-          return { ...clip, status: 'done' as const, resultText: clip.prompt };
-        }
-        return clip;
+      const res = await fetch('/api/create-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: id, blueprint: job.blueprint, brand: job.brand }),
       });
-
-      // Build a simple manifest linking all generated assets
-      const manifest = {
-        platform: job.platform,
-        contentType: job.contentType,
-        brand: job.brand,
-        goal: job.goal,
-        clips: updated.map((c) => ({
-          id: c.id,
-          label: c.label,
-          type: c.type,
-          resultUrl: c.resultUrl,
-          resultText: c.resultText,
-          timing: c.timing,
-          duration: c.duration,
-        })),
-        createdAt: new Date().toISOString(),
-      };
-
-      // Save manifest as a data URL so it's accessible without a server
-      const blob = new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' });
-      const finalOutputUrl = URL.createObjectURL(blob);
-
-      persist({ ...job, blueprint: updated, finalOutputUrl });
+      const data = await res.json() as { outputUrl?: string; error?: string };
+      if (!res.ok || data.error) throw new Error(data.error ?? 'Unknown error');
+      persist({ ...job, finalOutputUrl: data.outputUrl });
+    } catch (err) {
+      setCreateError(String(err));
     } finally {
       setCreating(false);
     }
@@ -341,22 +353,23 @@ export default function JobPage() {
         </div>
         <p className="text-neutral-400 text-sm">{job.goal}</p>
         {job.uploadedImages.length > 0 && (
-          <div className="flex gap-2 mt-3">
-            {job.uploadedImages.map((img) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={img.index}
-                src={img.dataUrl}
-                alt={img.name}
-                className="w-14 h-14 object-cover rounded-lg border border-neutral-700"
-              />
+          <div className="flex gap-2 mt-3 flex-wrap">
+            {job.uploadedImages.map((img, i) => (
+              <div key={img.index} className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={img.dataUrl}
+                  alt={img.name}
+                  className="w-14 h-14 object-cover rounded-lg border border-neutral-700"
+                />
+                <span className="absolute -top-1 -right-1 bg-neutral-700 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center font-bold">{i + 1}</span>
+              </div>
             ))}
           </div>
         )}
       </div>
 
-      {/* Storyboard section */}
-      {/* Model selector — always visible */}
+      {/* Model selector */}
       <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-5 mb-6">
         <h3 className="text-sm font-semibold text-neutral-300 uppercase tracking-wider mb-1">🎬 AI Generation Models</h3>
         <p className="text-xs text-neutral-500 mb-4">
@@ -378,10 +391,11 @@ export default function JobPage() {
                   }`}
                 >
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className={`text-xs font-bold ${videoModel === m.id ? 'text-pink-300' : 'text-neutral-300'}`}>{m.name}</span>
                       <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${
-                        m.tier === 'budget' ? 'bg-green-900/60 text-green-300'
+                        m.tier === 'draft' ? 'bg-blue-900/60 text-blue-300'
+                        : m.tier === 'budget' ? 'bg-green-900/60 text-green-300'
                         : m.tier === 'standard' ? 'bg-yellow-900/60 text-yellow-300'
                         : 'bg-red-900/60 text-red-300'
                       }`}>{m.costPerClip}</span>
@@ -470,21 +484,25 @@ export default function JobPage() {
                 key={clip.id}
                 clip={clip}
                 job={job}
-                index={i}
                 onGenerate={generateClip}
+                onPromptChange={(clipId, newPrompt) => updateClip(clipId, { prompt: newPrompt })}
+                onImageChange={(clipId, newIndex) => updateClip(clipId, { sourceImageIndex: newIndex })}
               />
             ))}
           </div>
 
           {/* CREATE button */}
           <div className="sticky bottom-6">
+            {createError && (
+              <p className="text-red-400 text-sm text-center mb-2">{createError}</p>
+            )}
             <button
               onClick={handleCreate}
               disabled={creating || !allMediaDone}
               title={allMediaDone ? '' : 'Generate all media clips first'}
               className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed text-white font-bold py-5 rounded-2xl text-xl transition-all transform hover:scale-[1.01] active:scale-[0.99] shadow-2xl"
             >
-              {creating ? '🎬 Creating…' : '🎬 CREATE'}
+              {creating ? '🎬 Merging video…' : '🎬 CREATE FINAL VIDEO'}
             </button>
             {!allMediaDone && (
               <p className="text-center text-xs text-neutral-500 mt-2">
@@ -497,16 +515,19 @@ export default function JobPage() {
           {job.finalOutputUrl && (
             <div className="mt-8 bg-green-950/40 border border-green-800 rounded-2xl p-6 text-center">
               <div className="text-4xl mb-3">🎉</div>
-              <h3 className="text-xl font-bold text-green-300 mb-2">Content Ready!</h3>
-              <p className="text-neutral-400 text-sm mb-4">
-                Your content manifest has been created. Download it to see all generated assets.
-              </p>
+              <h3 className="text-xl font-bold text-green-300 mb-2">Final Video Ready!</h3>
+              <video
+                src={job.finalOutputUrl}
+                controls
+                playsInline
+                className="w-full rounded-xl border border-green-800 mb-4 max-h-96"
+              />
               <a
                 href={job.finalOutputUrl}
-                download={`${job.brand.replace(/\s+/g, '-')}-content.json`}
+                download={`${job.brand.replace(/\s+/g, '-')}-final.mp4`}
                 className="inline-block bg-green-700 hover:bg-green-600 text-white font-semibold px-6 py-3 rounded-xl transition-colors"
               >
-                ⬇ Download Content Manifest
+                ⬇ Download Final Video
               </a>
             </div>
           )}
@@ -515,3 +536,5 @@ export default function JobPage() {
     </div>
   );
 }
+
+
